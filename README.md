@@ -34,6 +34,14 @@ Flags:
 go run main.go -p https://janus.qiswap.com/api/ -p http://34.66.201.0:23890 -w 6
 ```
 
+```
+ go run main.go -p https://janus.qiswap.com/api/ -p http://34.66.201.0:23890 -p http://127.0.0.1:23889 -p http://mainnet.qnode.meherett.com/77EKhIvlhGs1Jro4beyWH3KNxLZrSLgnyucHb -w 8
+ ```
+
+ ```
+ go run main.go -p https://janus.qiswap.com/api/ -p http://34.66.201.0:23890 -p http://127.0.0.1:23889 -p http://mainnet.qnode.meherett.com/77EKhIvlhGs1Jro4beyWH3KNxLZrSLgnyucHb -w 8  -t 1500000
+ ```
+
 ## To do
 
 - Include options to use cloud based DB (i.e. AWS Postgres)

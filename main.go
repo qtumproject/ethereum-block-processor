@@ -23,6 +23,8 @@ var (
 	providers  = kingpin.Flag("providers", "qtum rpc providers").Default("https://janus.qiswap.com").Short('p').URLList()
 	numWorkers = kingpin.Flag("workers", "Number of workers. Defaults to system's number of CPUs.").Default(strconv.Itoa(runtime.NumCPU())).Short('w').Int()
 	debug      = kingpin.Flag("debug", "debug mode").Short('d').Default("false").Bool()
+	blockFrom  = kingpin.Flag("from", "block number to start scanning from (default: 'Latest'").Short('f').Default("0").Int64()
+	blockTo    = kingpin.Flag("to", "block number to stop scanning (default: 1)").Short('t').Default("0").Int64()
 )
 var logger *logrus.Logger
 var start time.Time
@@ -30,8 +32,14 @@ var start time.Time
 func init() {
 	kingpin.Version("0.0.1")
 	kingpin.Parse()
-	log.DebugLevel = debug
-	logger = log.GetLogger()
+	mainLogger, err := log.GetLogger(
+		log.WithDebugLevel(*debug),
+		log.WithOutput(os.Stdout),
+	)
+	if err != nil {
+		logrus.Panic(err)
+	}
+	logger = mainLogger
 }
 
 func checkError(e error) {
@@ -44,29 +52,30 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	qdb, err := db.NewQtumDB()
-	checkError(err)
-
 	logger.Info("Number of workers: ", *numWorkers)
+	// channel to receive errors from goroutines
+	errChan := make(chan error)
 	// channel to pass blocks to workers
 	blockChan := make(chan string, *numWorkers)
 	// channel to pass results from workers to DB
 	resultChan := make(chan jsonrpc.HashPair)
-	dbFinishChan := make(chan error)
-	qdb.Start(resultChan, dbFinishChan)
+	qdb, err := db.NewQtumDB(resultChan, errChan)
+	checkError(err)
+	dbCloseChan := make(chan error)
+	qdb.Start(dbCloseChan)
 	// channel to signal  work completion to main from dispatcher
-	done := make(chan bool)
+	done := make(chan struct{})
 	// channel to receive os signals
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	// dispatch blocks to block channel
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	d := dispatcher.NewDispatcher(blockChan, *providers)
-	d.Start(ctx, blockChan, done)
+	d := dispatcher.NewDispatcher(blockChan, *providers, *blockFrom, *blockTo, done, errChan)
+	d.Start(ctx)
 	// start workers
 	wg.Add(*numWorkers)
-	workers.StartWorkers(ctx, *numWorkers, blockChan, resultChan, *providers, &wg)
+	workers.StartWorkers(ctx, *numWorkers, blockChan, resultChan, *providers, &wg, errChan)
 	start = time.Now()
 
 	var status int
@@ -79,6 +88,11 @@ func main() {
 		logger.Warn("Canceling block dispatcher and stopping workers")
 		cancelFunc()
 		status = 1
+	case err := <-errChan:
+		logger.Warn("Received fatal error: ", err)
+		logger.Warn("Canceling block dispatcher and stopping workers")
+		cancelFunc()
+		status = 1
 	}
 	wg.Wait()
 	logger.Info("All workers stopped. Waiting for DB to finish")
@@ -87,15 +101,15 @@ func main() {
 		logger.Info("Dropping table")
 		qdb.DropTable()
 	}
-	err = <-dbFinishChan
+	err = <-dbCloseChan
 	if err != nil {
 		logger.Fatal("Error closing DB:", err)
 	}
 	logger.WithFields(logrus.Fields{
-		"workers: ":       *numWorkers,
-		" SuccessBlocks:": workers.GetResults().TotalSuccessBlocks,
-		" failedBlocks:":  workers.GetResults().TotalFailBlocks,
-		" Duration:":      time.Since(start),
+		"workers ":              *numWorkers,
+		" successBlocks ":       qdb.GetRecords(),
+		" totalScannedBlocks  ": d.GetTotalBlocks(),
+		" duration ":            time.Since(start),
 	}).Info()
 	logger.Print("Program finished")
 	os.Exit(status)

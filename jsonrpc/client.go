@@ -19,14 +19,15 @@ type Client struct {
 }
 
 func NewClient(url string) *Client {
-	logger := log.GetLogger()
+	clientLogger, _ := log.GetLogger()
+	logger := clientLogger.WithFields(logrus.Fields{
+		"endpoint": url,
+	})
 
 	return &Client{
 		httpClient: &http.Client{},
 		url:        url,
-		logger: logger.WithFields(logrus.Fields{
-			"endpoint": url,
-		}),
+		logger:     logger,
 	}
 }
 

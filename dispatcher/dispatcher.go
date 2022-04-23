@@ -15,17 +15,22 @@ import (
 
 type dispatcher struct {
 	blockChan   chan string
+	done        chan struct{}
+	errChan     chan error
 	latestBlock int64
 	firstBlock  int64
 	urls        []*url.URL
 	logger      *logrus.Logger
 }
 
-func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo int64) *dispatcher {
+func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo int64, done chan struct{}, errChan chan error) *dispatcher {
+	logger, _ := log.GetLogger()
 	return &dispatcher{
 		blockChan:   blockChan,
+		done:        done,
+		errChan:     errChan,
 		urls:        urls,
-		logger:      log.GetLogger(),
+		logger:      logger,
 		latestBlock: blockFrom,
 		firstBlock:  blockTo,
 	}
@@ -35,40 +40,35 @@ func (d *dispatcher) findLatestBlock() int64 {
 	rpcClient := jsonrpc.NewClient(d.urls[0].String())
 	rpcResponse, err := rpcClient.Call("eth_getBlockByNumber", "latest", false)
 	if err != nil {
-		d.logger.Fatal("Invalid endpoint: ", err)
+		d.logger.Error("Invalid endpoint: ", err)
+		d.errChan <- err
+		return 0
 	}
 	if rpcResponse.Error != nil {
-		d.logger.Fatal("rpc response error: ", rpcResponse.Error)
+		d.logger.Error("rpc response error: ", rpcResponse.Error)
+		d.errChan <- err
+		return 0
 	}
 	var qtumBlock jsonrpc.GetBlockByNumberResponse
 	err = jsonrpc.GetBlockFromRPCResponse(rpcResponse, &qtumBlock)
 	if err != nil {
-		d.logger.Fatal("could not convert result to qtum.GetBlockByNumberResponse", err)
+		d.logger.Error("could not convert result to qtum.GetBlockByNumberResponse", err)
+		d.errChan <- err
+		return 0
 	}
 	latest, _ := strconv.ParseInt(qtumBlock.Number, 0, 64)
 	d.logger.Debug("LatestBlock: ", latest)
 	return latest
 }
 
-func (d *dispatcher) Start(ctx context.Context, blockChan chan<- string, done chan bool) {
+func (d *dispatcher) Start(ctx context.Context) {
 	go func() {
-		defer func() {
-			d.logger.Debug("closing block channel")
-			close(blockChan)
-		}()
 		if d.latestBlock == 0 {
 			d.latestBlock = d.findLatestBlock()
 		}
 		d.logger.Info("Starting dispatcher from block ", d.latestBlock, " to ", d.firstBlock)
 		for i := d.latestBlock; i > d.firstBlock; i-- {
-			select {
-			case <-ctx.Done():
-				return
-
-			default:
-				block := fmt.Sprintf("0x%x", i)
-				d.blockChan <- block
-			}
+			dispatch(ctx, d.blockChan, i)
 		}
 		d.logger.Info("Checking for failed blocks")
 		attempts := 0
@@ -82,14 +82,7 @@ func (d *dispatcher) Start(ctx context.Context, blockChan chan<- string, done ch
 					"attempts":      attempts,
 				}).Warn("retrying...")
 				for _, fb := range failedBlocks {
-					select {
-					case <-ctx.Done():
-						return
-
-					default:
-						block := fmt.Sprintf("0x%x", fb)
-						d.blockChan <- block
-					}
+					dispatch(ctx, d.blockChan, fb)
 				}
 				d.logger.Info("waiting 10 seconds before retrying again...")
 				time.Sleep(time.Second * 10)
@@ -99,7 +92,10 @@ func (d *dispatcher) Start(ctx context.Context, blockChan chan<- string, done ch
 			}
 		}
 
-		done <- true
+		d.logger.Debug("closing block channel")
+		close(d.blockChan)
+		d.logger.Debug("finished dispatching blocks")
+		d.done <- struct{}{}
 	}()
 }
 

@@ -11,16 +11,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Results struct {
-	NumWorkers         int
-	TotalSuccessBlocks int
-	TotalFailBlocks    int
-	FailBlocks         []int64
-	mu                 *sync.Mutex
+type results struct {
+	failBlocks []int64
+	mu         *sync.Mutex
 }
 
-var results = &Results{
-	FailBlocks: make([]int64, 0),
+var fails = &results{
+	failBlocks: make([]int64, 0),
 	mu:         &sync.Mutex{},
 }
 
@@ -32,7 +29,7 @@ type worker struct {
 	wg         *sync.WaitGroup
 	url        string
 	logger     *logrus.Entry
-	results    *Results
+	erroChan   chan error
 }
 
 func newWorker(
@@ -40,8 +37,10 @@ func newWorker(
 	blockChan <-chan string,
 	resultChan chan<- jsonrpc.HashPair,
 	url string,
-	wg *sync.WaitGroup) *worker {
-	logger := log.GetLogger().WithFields(logrus.Fields{
+	wg *sync.WaitGroup,
+	errChan chan error) *worker {
+	workerLogger, _ := log.GetLogger()
+	logger := workerLogger.WithFields(logrus.Fields{
 		"Worker id": id,
 		"endpoint":  url,
 	})
@@ -54,15 +53,15 @@ func newWorker(
 		wg:         wg,
 		url:        url,
 		logger:     logger,
-		results:    results,
+		erroChan:   errChan,
 	}
 }
 
-func StartWorkers(ctx context.Context, numWorkers int, blockChan <-chan string, resultChan chan<- jsonrpc.HashPair, providers []*url.URL, wg *sync.WaitGroup) {
+func StartWorkers(ctx context.Context, numWorkers int, blockChan <-chan string, resultChan chan<- jsonrpc.HashPair, providers []*url.URL, wg *sync.WaitGroup, errChan chan error) {
 	p := len(providers)
 	for i := 0; i < numWorkers; i++ {
 		go func(i int) {
-			w := newWorker(i, blockChan, resultChan, providers[i%p].String(), wg)
+			w := newWorker(i, blockChan, resultChan, providers[i%p].String(), wg, errChan)
 			w.Start(ctx)
 		}(i)
 	}
@@ -86,12 +85,12 @@ func (w *worker) Start(ctx context.Context) {
 				rpcResponse, err := w.rpcClient.Call("eth_getBlockByNumber", blockNumber, true)
 				if err != nil {
 					w.logger.Error("RPC client call error: ", err)
-					w.updateResults(false, b)
+					fails.updateFailedBlocks(b)
 					continue
 				}
 				if rpcResponse.Error != nil {
 					w.logger.Error("rpc response error: ", rpcResponse.Error)
-					w.updateResults(false, b)
+					fails.updateFailedBlocks(b)
 					continue
 				}
 
@@ -99,14 +98,14 @@ func (w *worker) Start(ctx context.Context) {
 				err = jsonrpc.GetBlockFromRPCResponse(rpcResponse, &qtumBlock)
 				if err != nil {
 					w.logger.Error("could not convert result to qtum.GetBlockByNumberResponse: ", err)
-					w.updateResults(false, b)
+					fails.updateFailedBlocks(b)
 					continue
 				}
 				var ethBlock jsonrpc.EthBlockHeader
 				err = jsonrpc.GetBlockFromRPCResponse(rpcResponse, &ethBlock)
 				if err != nil {
 					w.logger.Error("could not convert result to qtum.EthBlockHeader: ", err)
-					w.updateResults(false, b)
+					fails.updateFailedBlocks(b)
 					continue
 				}
 
@@ -116,7 +115,6 @@ func (w *worker) Start(ctx context.Context) {
 					BlockNumber: int(b),
 				}
 				w.resultChan <- hashPair
-				w.updateResults(true, b)
 			} else {
 				w.logger.Info("worker: ", w.id, " quitting...")
 				return
@@ -125,19 +123,27 @@ func (w *worker) Start(ctx context.Context) {
 	}
 }
 
-func (w *worker) updateResults(success bool, blockNumber int64) {
-	if success {
-		w.results.mu.Lock()
-		w.results.TotalSuccessBlocks++
-		w.results.mu.Unlock()
-	} else {
-		w.results.mu.Lock()
-		w.results.TotalFailBlocks++
-		w.results.FailBlocks = append(w.results.FailBlocks, blockNumber)
-		w.results.mu.Unlock()
-	}
+func (r *results) updateFailedBlocks(blockNumber int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failBlocks = append(r.failBlocks, blockNumber)
 }
 
-func GetResults() *Results {
-	return results
+func GetFailedBlocks() []int64 {
+	fails.mu.Lock()
+	defer fails.mu.Unlock()
+	return fails.failBlocks
+}
+
+func ResetFailedBlocks() {
+	fails.mu.Lock()
+	defer fails.mu.Unlock()
+	fails.failBlocks = make([]int64, 0)
+}
+
+// used for testing dispatcher
+func SetFailedBlocks(blocks []int64) {
+	fails.mu.Lock()
+	defer fails.mu.Unlock()
+	fails.failBlocks = blocks
 }
