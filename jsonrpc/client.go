@@ -16,18 +16,21 @@ type Client struct {
 	httpClient *http.Client
 	url        string
 	logger     *logrus.Entry
+	id         int
 }
 
-func NewClient(url string) *Client {
+func NewClient(url string, id int) *Client {
 	clientLogger, _ := log.GetLogger()
 	logger := clientLogger.WithFields(logrus.Fields{
 		"endpoint": url,
+		"clientId": id,
 	})
 
 	return &Client{
 		httpClient: &http.Client{},
 		url:        url,
 		logger:     logger,
+		id:         id,
 	}
 }
 
@@ -54,7 +57,7 @@ func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Requ
 }
 
 func (c *Client) do(jsonReq []byte) (*JSONRPCResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 	httpReq, err := c.newHttpRequest(ctx, jsonReq)
 	if err != nil {
@@ -82,8 +85,8 @@ func (c *Client) doWithRetries(jsonReq []byte) (*JSONRPCResponse, error) {
 	var err error
 	var backoffSchedule = []time.Duration{
 		1 * time.Second,
-		6 * time.Second,
-		12 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
 	}
 	for _, backoff := range backoffSchedule {
 		rpcResponse, err = c.do(jsonReq)
@@ -92,9 +95,9 @@ func (c *Client) doWithRetries(jsonReq []byte) (*JSONRPCResponse, error) {
 		}
 		c.logger.Warnf("Request error: %+v", err)
 		rand.Seed(time.Now().UnixNano())
-		n := rand.Intn(5)
-		c.logger.Warnf("Retrying in %v", backoff+time.Duration(n)*time.Second)
-		time.Sleep(backoff + time.Duration(n)*time.Second)
+		n := rand.Intn(10)
+		c.logger.Warnf("Retrying in %v", backoff+100*time.Millisecond*time.Duration(n))
+		time.Sleep(backoff + 100*time.Millisecond*time.Duration(n))
 
 	}
 	return rpcResponse, err

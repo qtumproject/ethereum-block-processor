@@ -47,7 +47,7 @@ func newWorker(
 
 	return &worker{
 		id:         id,
-		rpcClient:  jsonrpc.NewClient(url),
+		rpcClient:  jsonrpc.NewClient(url, id),
 		blockChan:  blockChan,
 		resultChan: resultChan,
 		wg:         wg,
@@ -72,7 +72,7 @@ func (w *worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.WithField("msg", "received stop signal... worker quitting").Info()
+			w.logger.Info("msg: ", "received stop signal... worker quitting")
 			return
 
 		case blockNumber, ok := <-w.blockChan:

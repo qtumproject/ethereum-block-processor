@@ -38,7 +38,7 @@ func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo in
 }
 
 func (d *dispatcher) findLatestBlock() int64 {
-	rpcClient := jsonrpc.NewClient(d.urls[0].String())
+	rpcClient := jsonrpc.NewClient(d.urls[0].String(), 0)
 	rpcResponse, err := rpcClient.Call("eth_getBlockByNumber", "latest", false)
 	if err != nil {
 		d.logger.Error("Invalid endpoint: ", err)
