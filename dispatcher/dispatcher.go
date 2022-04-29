@@ -14,13 +14,14 @@ import (
 )
 
 type dispatcher struct {
-	blockChan   chan string
-	done        chan struct{}
-	errChan     chan error
-	latestBlock int64
-	firstBlock  int64
-	urls        []*url.URL
-	logger      *logrus.Logger
+	blockChan        chan string
+	done             chan struct{}
+	errChan          chan error
+	latestBlock      int64
+	firstBlock       int64
+	urls             []*url.URL
+	logger           *logrus.Logger
+	dispatchedBlocks int64
 }
 
 func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo int64, done chan struct{}, errChan chan error) *dispatcher {
@@ -68,7 +69,15 @@ func (d *dispatcher) Start(ctx context.Context) {
 		}
 		d.logger.Info("Starting dispatcher from block ", d.latestBlock, " to ", d.firstBlock)
 		for i := d.latestBlock; i > d.firstBlock; i-- {
-			dispatch(ctx, d.blockChan, i)
+			select {
+			case <-ctx.Done():
+				return
+
+			default:
+				block := fmt.Sprintf("0x%x", i)
+				d.blockChan <- block
+				d.dispatchedBlocks++
+			}
 		}
 		d.logger.Info("Checking for failed blocks")
 		attempts := 0
@@ -82,7 +91,14 @@ func (d *dispatcher) Start(ctx context.Context) {
 					"attempts":      attempts,
 				}).Warn("retrying...")
 				for _, fb := range failedBlocks {
-					dispatch(ctx, d.blockChan, fb)
+					select {
+					case <-ctx.Done():
+						return
+
+					default:
+						block := fmt.Sprintf("0x%x", fb)
+						d.blockChan <- block
+					}
 				}
 				d.logger.Info("waiting 10 seconds before retrying again...")
 				time.Sleep(time.Second * 10)
@@ -99,18 +115,18 @@ func (d *dispatcher) Start(ctx context.Context) {
 	}()
 }
 
-func dispatch(ctx context.Context, blockChan chan string, b int64) {
-	select {
-	case <-ctx.Done():
-		return
+// func dispatch(ctx context.Context, blockChan chan string, b int64) {
+// 	select {
+// 	case <-ctx.Done():
+// 		return
 
-	default:
-		block := fmt.Sprintf("0x%x", b)
-		blockChan <- block
-	}
+// 	default:
+// 		block := fmt.Sprintf("0x%x", b)
+// 		blockChan <- block
+// 	}
 
-}
+// }
 
-func (d *dispatcher) GetTotalBlocks() int64 {
-	return d.latestBlock
+func (d *dispatcher) GetDispatchedBlocks() int64 {
+	return d.dispatchedBlocks
 }

@@ -106,10 +106,10 @@ func main() {
 		logger.Fatal("Error closing DB:", err)
 	}
 	logger.WithFields(logrus.Fields{
-		"workers ":              *numWorkers,
-		" successBlocks ":       qdb.GetRecords(),
-		" totalScannedBlocks  ": d.GetTotalBlocks(),
-		" duration ":            time.Since(start),
+		"workers":             *numWorkers,
+		" successBlocks":      qdb.GetRecords(),
+		" totalScannedBlocks": d.GetDispatchedBlocks(),
+		" duration":           time.Since(start).Truncate(time.Second),
 	}).Info()
 	logger.Print("Program finished")
 	os.Exit(status)

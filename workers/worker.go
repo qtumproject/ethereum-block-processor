@@ -41,8 +41,8 @@ func newWorker(
 	errChan chan error) *worker {
 	workerLogger, _ := log.GetLogger()
 	logger := workerLogger.WithFields(logrus.Fields{
-		"Worker id": id,
-		"endpoint":  url,
+		"WorkerId": id,
+		"endpoint": url,
 	})
 
 	return &worker{
@@ -72,7 +72,7 @@ func (w *worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.Info("worker: ", w.id, " stop signal received and quitting...")
+			w.logger.WithField("msg", "received stop signal... worker quitting").Info()
 			return
 
 		case blockNumber, ok := <-w.blockChan:
