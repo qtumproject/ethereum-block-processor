@@ -19,12 +19,16 @@ This program scans all the blocks from Qtum network (aprox 1.7 millions) and for
 ## Command line options
 
 ```
+usage: main [<flags>]
+
 Flags:
       --help        Show context-sensitive help (also try --help-long and --help-man).
   -p, --providers=https://janus.qiswap.com ...  
                     qtum rpc providers
   -w, --workers=12  Number of workers. Defaults to system's number of CPUs.
   -d, --debug       debug mode
+  -f, --from=0      block number to start scanning from (default: 'Latest'
+  -t, --to=0        block number to stop scanning (default: 1)
       --version     Show application version.
 ```
 
@@ -44,5 +48,5 @@ go run main.go -p https://janus.qiswap.com/api/ -p http://34.66.201.0:23890 -w 6
 
 ## To do
 
-- Include options to use cloud based DB (i.e. AWS Postgres)
-- Include tests
+- Include options to use cloud based DB (i.e. AWS Postgres) or REDIS
+- Improve tests coverage

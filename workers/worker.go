@@ -82,7 +82,7 @@ func (w *worker) Start(ctx context.Context) {
 					"Blocknumber": b,
 				})
 				w.logger.Debug("Processing block")
-				rpcResponse, err := w.rpcClient.Call("eth_getBlockByNumber", blockNumber, true)
+				rpcResponse, err := w.rpcClient.Call(ctx, "eth_getBlockByNumber", blockNumber, true)
 				if err != nil {
 					w.logger.Error("RPC client call error: ", err)
 					fails.updateFailedBlocks(b)

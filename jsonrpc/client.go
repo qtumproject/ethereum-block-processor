@@ -12,6 +12,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const TIMEOUT time.Duration = 5
+
 type Client struct {
 	httpClient *http.Client
 	url        string
@@ -34,14 +36,14 @@ func NewClient(url string, id int) *Client {
 	}
 }
 
-func (c *Client) Call(method string, params ...interface{}) (*JSONRPCResponse, error) {
+func (c *Client) Call(ctx context.Context, method string, params ...interface{}) (*JSONRPCResponse, error) {
 
 	rpcRequest := newJSONRPCRequest(method, params...)
 	jsonRequest, err := json.Marshal(rpcRequest)
 	if err != nil {
 		return nil, err
 	}
-	return c.doWithRetries(jsonRequest)
+	return c.doWithRetries(ctx, jsonRequest)
 }
 
 func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Request, error) {
@@ -56,8 +58,8 @@ func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Requ
 	return req, nil
 }
 
-func (c *Client) do(jsonReq []byte) (*JSONRPCResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Second*TIMEOUT)
 	defer cancel()
 	httpReq, err := c.newHttpRequest(ctx, jsonReq)
 	if err != nil {
@@ -80,7 +82,7 @@ func (c *Client) do(jsonReq []byte) (*JSONRPCResponse, error) {
 	return &rpcResponse, nil
 }
 
-func (c *Client) doWithRetries(jsonReq []byte) (*JSONRPCResponse, error) {
+func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, error) {
 	var rpcResponse *JSONRPCResponse
 	var err error
 	var backoffSchedule = []time.Duration{
@@ -89,15 +91,21 @@ func (c *Client) doWithRetries(jsonReq []byte) (*JSONRPCResponse, error) {
 		4 * time.Second,
 	}
 	for _, backoff := range backoffSchedule {
-		rpcResponse, err = c.do(jsonReq)
-		if err == nil {
-			break
+		select {
+		case <-ctx.Done():
+			c.logger.Debug("Client cancelled")
+			return nil, ctx.Err()
+		default:
+			rpcResponse, err = c.do(ctx, jsonReq)
+			if err == nil {
+				break
+			}
+			c.logger.Warnf("Request error: %+v", err)
+			rand.Seed(time.Now().UnixNano())
+			n := rand.Intn(10)
+			c.logger.Warnf("Retrying in %v", backoff+100*time.Millisecond*time.Duration(n))
+			time.Sleep(backoff + 100*time.Millisecond*time.Duration(n))
 		}
-		c.logger.Warnf("Request error: %+v", err)
-		rand.Seed(time.Now().UnixNano())
-		n := rand.Intn(10)
-		c.logger.Warnf("Retrying in %v", backoff+100*time.Millisecond*time.Duration(n))
-		time.Sleep(backoff + 100*time.Millisecond*time.Duration(n))
 
 	}
 	return rpcResponse, err
