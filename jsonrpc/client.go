@@ -12,7 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const TIMEOUT time.Duration = 5
+const TIMEOUT time.Duration = 12
 
 type Client struct {
 	httpClient *http.Client

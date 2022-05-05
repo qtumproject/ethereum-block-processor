@@ -22,14 +22,16 @@ var fails = &results{
 }
 
 type worker struct {
-	id         int
-	rpcClient  *jsonrpc.Client
-	blockChan  <-chan string
-	resultChan chan<- jsonrpc.HashPair
-	wg         *sync.WaitGroup
-	url        string
-	logger     *logrus.Entry
-	erroChan   chan error
+	id           int
+	rpcClient    *jsonrpc.Client
+	blockChan    <-chan string
+	resultChan   chan<- jsonrpc.HashPair
+	wg           *sync.WaitGroup
+	url          string
+	logger       *logrus.Entry
+	erroChan     chan error
+	totalBlocks  uint64
+	succesBlocks uint64
 }
 
 func newWorker(
@@ -72,11 +74,15 @@ func (w *worker) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			w.logger.Info("msg: ", "received stop signal... worker quitting")
+			w.logger.WithFields(logrus.Fields{
+				"totalBlocks":   w.totalBlocks,
+				"successBlocks": w.succesBlocks,
+			}).Info("msg: ", "received stop signal... worker quitting")
 			return
 
 		case blockNumber, ok := <-w.blockChan:
 			if ok {
+				w.totalBlocks++
 				b, _ := strconv.ParseInt(blockNumber, 0, 64)
 				w.logger = w.logger.WithFields(logrus.Fields{
 					"Blocknumber": b,
@@ -115,8 +121,12 @@ func (w *worker) Start(ctx context.Context) {
 					BlockNumber: int(b),
 				}
 				w.resultChan <- hashPair
+				w.succesBlocks++
 			} else {
-				w.logger.Info("worker: ", w.id, " quitting...")
+				w.logger.WithFields(logrus.Fields{
+					"totalBlocks":   w.totalBlocks,
+					"successBlocks": w.succesBlocks,
+				}).Info("worker: ", w.id, " quitting...")
 				return
 			}
 		}

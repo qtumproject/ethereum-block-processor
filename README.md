@@ -8,7 +8,7 @@ This program scans all the blocks from Qtum network (aprox 1.7 millions) and for
 ## Features
 
 - Worker pool architecture
-- Command line option to set number of workers (defaults to num of CPU cores)
+- Configurable number of workers (defaults to num of CPU cores)
 - JSON RPC client over http
 - http retry with backoff strategy and jitter schema
 - Graceful termination for user interruption (^C)
