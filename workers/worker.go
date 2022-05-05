@@ -75,8 +75,9 @@ func (w *worker) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			w.logger.WithFields(logrus.Fields{
-				"totalBlocks":   w.totalBlocks,
-				"successBlocks": w.succesBlocks,
+				"totalBlocks":    w.totalBlocks,
+				"successBlocks":  w.succesBlocks,
+				"successRate(%)": float64(w.succesBlocks) / float64(w.totalBlocks),
 			}).Info("msg: ", "received stop signal... worker quitting")
 			return
 
@@ -124,8 +125,9 @@ func (w *worker) Start(ctx context.Context) {
 				w.succesBlocks++
 			} else {
 				w.logger.WithFields(logrus.Fields{
-					"totalBlocks":   w.totalBlocks,
-					"successBlocks": w.succesBlocks,
+					"totalBlocks":    w.totalBlocks,
+					"successBlocks":  w.succesBlocks,
+					"successRate(%)": float64(w.succesBlocks) / float64(w.totalBlocks),
 				}).Info("worker: ", w.id, " quitting...")
 				return
 			}

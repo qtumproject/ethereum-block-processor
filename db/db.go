@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
@@ -63,6 +64,7 @@ func (q *QtumDB) DropTable() (sql.Result, error) {
 
 func (q *QtumDB) Start(dbCloseChan chan error) {
 	go func() {
+		start := time.Now()
 		for {
 			pair, ok := <-q.resultChan
 			if !ok {
@@ -76,7 +78,12 @@ func (q *QtumDB) Start(dbCloseChan chan error) {
 			})
 			q.logger.Debug(" Received new pair of hashes")
 			if pair.BlockNumber%50000 == 0 {
-				q.logger.Info(" Received new pair of hashes")
+				duration := time.Since(start)
+				q.logger.WithFields(logrus.Fields{
+					"elapsedTime":     duration,
+					"blocksProcessed": "50.000",
+				}).Info(" Received new pair of hashes")
+				start = time.Now()
 			}
 			_, err := q.insert(pair.BlockNumber, pair.EthHash, pair.QtumHash)
 			if err != nil {
