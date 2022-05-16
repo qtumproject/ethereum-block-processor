@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
@@ -77,8 +78,8 @@ func (w *worker) Start(ctx context.Context) {
 			w.logger.WithFields(logrus.Fields{
 				"totalBlocks":    w.totalBlocks,
 				"successBlocks":  w.succesBlocks,
-				"successRate(%)": float64(w.succesBlocks) / float64(w.totalBlocks),
-			}).Info("msg: ", "received stop signal... worker quitting")
+				"successRate(%)": fmt.Sprintf("%.3f%% ", float64(w.succesBlocks)/float64(w.totalBlocks)),
+			}).Info("msg: ", "received Cancel signal... worker quitting")
 			return
 
 		case blockNumber, ok := <-w.blockChan:
@@ -91,8 +92,10 @@ func (w *worker) Start(ctx context.Context) {
 				w.logger.Debug("Processing block")
 				rpcResponse, err := w.rpcClient.Call(ctx, "eth_getBlockByNumber", blockNumber, true)
 				if err != nil {
-					w.logger.Error("RPC client call error: ", err)
-					fails.updateFailedBlocks(b)
+					if err != ctx.Err() {
+						w.logger.Error("RPC client call error: ", err)
+						fails.updateFailedBlocks(b)
+					}
 					continue
 				}
 				if rpcResponse.Error != nil {

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"io/ioutil"
 	"math/rand"
+	"net"
 	"net/http"
 	"time"
 
@@ -12,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const TIMEOUT time.Duration = 12
+const TIMEOUT time.Duration = 40
 
 type Client struct {
 	httpClient *http.Client
@@ -28,8 +31,25 @@ func NewClient(url string, id int) *Client {
 		"clientId": id,
 	})
 
+	tr := &http.Transport{
+		MaxIdleConns: 1,
+		//	IdleConnTimeout:     20,
+		MaxIdleConnsPerHost: 1,
+		MaxConnsPerHost:     1,
+		//	DisableKeepAlives:   false,
+		DialContext: (&net.Dialer{
+			Timeout:   40 * time.Second,
+			KeepAlive: 100 * time.Second,
+		}).DialContext,
+	}
+
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tr,
+	}
+
 	return &Client{
-		httpClient: &http.Client{},
+		httpClient: httpClient,
 		url:        url,
 		logger:     logger,
 		id:         id,
@@ -53,6 +73,7 @@ func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Requ
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Close = true
 	req = req.WithContext(ctx)
 
 	return req, nil
@@ -71,7 +92,10 @@ func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, erro
 		return nil, err
 	}
 
-	defer httpResp.Body.Close()
+	defer func() {
+		io.Copy(ioutil.Discard, httpResp.Body)
+		httpResp.Body.Close()
+	}()
 
 	var rpcResponse JSONRPCResponse
 	err = json.NewDecoder(httpResp.Body).Decode(&rpcResponse)
@@ -103,8 +127,8 @@ func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCRes
 			c.logger.Warnf("Request error: %+v", err)
 			rand.Seed(time.Now().UnixNano())
 			n := rand.Intn(10)
-			c.logger.Warnf("Retrying in %v", backoff+100*time.Millisecond*time.Duration(n))
-			time.Sleep(backoff + 100*time.Millisecond*time.Duration(n))
+			c.logger.Warnf("Retrying in %v", backoff+500*time.Millisecond*time.Duration(n))
+			time.Sleep(backoff + 500*time.Millisecond*time.Duration(n))
 		}
 
 	}

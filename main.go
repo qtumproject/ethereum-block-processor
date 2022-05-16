@@ -54,11 +54,11 @@ func main() {
 
 	logger.Info("Number of workers: ", *numWorkers)
 	// channel to receive errors from goroutines
-	errChan := make(chan error)
+	errChan := make(chan error, *numWorkers+1)
 	// channel to pass blocks to workers
 	blockChan := make(chan string, *numWorkers)
 	// channel to pass results from workers to DB
-	resultChan := make(chan jsonrpc.HashPair)
+	resultChan := make(chan jsonrpc.HashPair, *numWorkers)
 	qdb, err := db.NewQtumDB(resultChan, errChan)
 	checkError(err)
 	dbCloseChan := make(chan error)
@@ -94,6 +94,7 @@ func main() {
 		cancelFunc()
 		status = 1
 	}
+	logger.Debug("Waiting for all workers to exit")
 	wg.Wait()
 	logger.Info("All workers stopped. Waiting for DB to finish")
 	close(resultChan)
@@ -101,10 +102,15 @@ func main() {
 		logger.Info("Dropping table")
 		qdb.DropTable()
 	}
-	err = <-dbCloseChan
-	if err != nil {
-		logger.Fatal("Error closing DB:", err)
+	select {
+	case err = <-dbCloseChan:
+		if err != nil {
+			logger.Fatal("Error closing DB:", err)
+		}
+	case <-time.After(time.Second * 2):
+		logger.Fatal("Error waiting for DB to close")
 	}
+
 	logger.WithFields(logrus.Fields{
 		"workers":             *numWorkers,
 		" successBlocks":      qdb.GetRecords(),

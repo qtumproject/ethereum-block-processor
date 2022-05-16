@@ -77,18 +77,19 @@ func (q *QtumDB) Start(dbCloseChan chan error) {
 				"blockNum": pair.BlockNumber,
 			})
 			q.logger.Debug(" Received new pair of hashes")
-			if pair.BlockNumber%50000 == 0 {
+			if pair.BlockNumber%10000 == 0 {
 				duration := time.Since(start)
 				q.logger.WithFields(logrus.Fields{
 					"elapsedTime":     duration,
-					"blocksProcessed": "50.000",
-				}).Info(" Received new pair of hashes")
+					"blocksProcessed": "10.000",
+				}).Info("progress checkpoint")
 				start = time.Now()
 			}
 			_, err := q.insert(pair.BlockNumber, pair.EthHash, pair.QtumHash)
 			if err != nil {
 				q.logger.Error("error writing to db: ", err, " for block: ", pair.BlockNumber)
 				q.errChan <- err
+				q.logger.Debug("database exiting")
 				return
 			}
 			q.records += 1
