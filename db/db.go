@@ -8,6 +8,7 @@ import (
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
 	_ "github.com/lib/pq"
+	"github.com/schollz/progressbar/v3"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,7 +64,9 @@ func (q *QtumDB) DropTable() (sql.Result, error) {
 }
 
 func (q *QtumDB) Start(dbCloseChan chan error) {
+	const PROGRESS_LEVEL_THRESHOLD = 10000
 	go func() {
+		progBar := getBar(PROGRESS_LEVEL_THRESHOLD)
 		start := time.Now()
 		for {
 			pair, ok := <-q.resultChan
@@ -77,13 +80,19 @@ func (q *QtumDB) Start(dbCloseChan chan error) {
 				"blockNum": pair.BlockNumber,
 			})
 			q.logger.Debug(" Received new pair of hashes")
-			if pair.BlockNumber%10000 == 0 {
+			if q.logger.Level != logrus.DebugLevel {
+				progBar.Add(1)
+			}
+
+			if pair.BlockNumber%PROGRESS_LEVEL_THRESHOLD == 0 {
 				duration := time.Since(start)
+				fmt.Println()
 				q.logger.WithFields(logrus.Fields{
 					"elapsedTime":     duration,
-					"blocksProcessed": "10.000",
+					"blocksProcessed": PROGRESS_LEVEL_THRESHOLD,
 				}).Info("progress checkpoint")
 				start = time.Now()
+				progBar = getBar(PROGRESS_LEVEL_THRESHOLD)
 			}
 			_, err := q.insert(pair.BlockNumber, pair.EthHash, pair.QtumHash)
 			if err != nil {
@@ -100,4 +109,20 @@ func (q *QtumDB) Start(dbCloseChan chan error) {
 
 func (q *QtumDB) GetRecords() int64 {
 	return q.records
+}
+
+// creates a progress bar used to display progress when only 1 alien is left
+func getBar(I int) *progressbar.ProgressBar {
+	bar := progressbar.NewOptions(I,
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWidth(50),
+		progressbar.OptionSetDescription("[cyan][reset]==>Processing 10K Qtum blocks..."),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}))
+	return bar
 }

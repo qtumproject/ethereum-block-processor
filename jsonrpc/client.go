@@ -15,7 +15,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const TIMEOUT time.Duration = 40
+const TIMEOUT = 20
 
 type Client struct {
 	httpClient *http.Client
