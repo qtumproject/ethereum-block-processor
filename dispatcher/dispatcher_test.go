@@ -18,7 +18,7 @@ import (
 func TestDispatcher(t *testing.T) {
 
 	buffer := bytes.Buffer{}
-	log.GetLogger(log.WithDebugLevel(true), log.WithOutput(&buffer))
+	log.GetLogger(log.WithDebugLevel(true), log.WithWriter(&buffer))
 	server := makeJSONRPCServer()
 	defer server.Close()
 	urlsGood := []*url.URL{

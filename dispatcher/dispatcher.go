@@ -20,18 +20,18 @@ type dispatcher struct {
 	latestBlock      int64
 	firstBlock       int64
 	urls             []*url.URL
-	logger           *logrus.Logger
+	logger           *logrus.Entry
 	dispatchedBlocks int64
 }
 
 func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo int64, done chan struct{}, errChan chan error) *dispatcher {
-	logger, _ := log.GetLogger()
+	dispatchLogger, _ := log.GetLogger()
 	return &dispatcher{
 		blockChan:   blockChan,
 		done:        done,
 		errChan:     errChan,
 		urls:        urls,
-		logger:      logger,
+		logger:      dispatchLogger.WithField("module", "dispatcher"),
 		latestBlock: blockFrom,
 		firstBlock:  blockTo,
 	}
@@ -77,6 +77,7 @@ func (d *dispatcher) Start(ctx context.Context) {
 				block := fmt.Sprintf("0x%x", i)
 				d.blockChan <- block
 				d.dispatchedBlocks++
+				// time.Sleep(time.Second * 10)
 			}
 		}
 		d.logger.Info("Checking for failed blocks")
