@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -15,7 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const TIMEOUT = 20
+var TIMEOUT = 20
 
 type Client struct {
 	httpClient *http.Client
@@ -27,15 +28,16 @@ type Client struct {
 func NewClient(url string, id int) *Client {
 	clientLogger, _ := log.GetLogger()
 	logger := clientLogger.WithFields(logrus.Fields{
-		"endpoint": url,
-		"clientId": id,
+		"component": "httpClient",
+		"endpoint":  url,
+		"clientId":  id,
 	})
 
 	tr := &http.Transport{
-		MaxIdleConns: 1,
-		//	IdleConnTimeout:     20,
-		MaxIdleConnsPerHost: 1,
-		MaxConnsPerHost:     1,
+		MaxIdleConns: 10,
+		// IdleConnTimeout:     60 * time.Second,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     10,
 		//	DisableKeepAlives:   false,
 		DialContext: (&net.Dialer{
 			Timeout:   40 * time.Second,
@@ -63,6 +65,7 @@ func (c *Client) Call(ctx context.Context, method string, params ...interface{})
 	if err != nil {
 		return nil, err
 	}
+	// c.logger.Error("Returning from Call")
 	return c.doWithRetries(ctx, jsonRequest)
 }
 
@@ -80,7 +83,7 @@ func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Requ
 }
 
 func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*TIMEOUT)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*time.Duration(TIMEOUT))
 	defer cancel()
 	httpReq, err := c.newHttpRequest(ctx, jsonReq)
 	if err != nil {
@@ -89,7 +92,7 @@ func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, erro
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("http response error: %s ", err)
 	}
 
 	defer func() {
@@ -100,7 +103,7 @@ func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, erro
 	var rpcResponse JSONRPCResponse
 	err = json.NewDecoder(httpResp.Body).Decode(&rpcResponse)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("json decoder error: %s ", err)
 	}
 
 	return &rpcResponse, nil
@@ -113,8 +116,9 @@ func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCRes
 		1 * time.Second,
 		2 * time.Second,
 		4 * time.Second,
+		0 * time.Second,
 	}
-	for _, backoff := range backoffSchedule {
+	for i, backoff := range backoffSchedule {
 		select {
 		case <-ctx.Done():
 			c.logger.Debug("Client cancelled")
@@ -125,6 +129,9 @@ func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCRes
 				break
 			}
 			c.logger.Warnf("Request error: %+v", err)
+			if i == len(backoffSchedule)-1 {
+				break
+			}
 			rand.Seed(time.Now().UnixNano())
 			n := rand.Intn(10)
 			c.logger.Warnf("Retrying in %v", backoff+500*time.Millisecond*time.Duration(n))
@@ -132,5 +139,15 @@ func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCRes
 		}
 
 	}
+	// c.logger.Error("Returning from doWithRetries with err: ", err)
 	return rpcResponse, err
+}
+
+//Required for CircuitBreaker proxy
+func (c *Client) GetState() string {
+	return "UNDEFINED"
+}
+
+func SetTimeOut(timeout int) {
+	TIMEOUT = timeout
 }

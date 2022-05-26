@@ -12,7 +12,7 @@ import (
 )
 
 var buffer = bytes.Buffer{}
-var logger, _ = log.GetLogger(log.WithDebugLevel(true), log.WithOutput(&buffer))
+var logger, _ = log.GetLogger(log.WithDebugLevel(true), log.WithWriter(&buffer))
 
 func TestClientWithCancel(t *testing.T) {
 	log.GetLogger(log.WithDebugLevel(true))

@@ -34,7 +34,7 @@ func init() {
 	kingpin.Parse()
 	mainLogger, err := log.GetLogger(
 		log.WithDebugLevel(*debug),
-		log.WithOutput(os.Stdout),
+		log.WithWriter(os.Stdout),
 	)
 	if err != nil {
 		logrus.Panic(err)

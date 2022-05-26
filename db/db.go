@@ -30,7 +30,7 @@ type QtumDB struct {
 
 func NewQtumDB(resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, error) {
 	dbLogger, _ := log.GetLogger()
-	logger := dbLogger.WithFields(logrus.Fields{})
+	logger := dbLogger.WithField("module", "db")
 	psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
