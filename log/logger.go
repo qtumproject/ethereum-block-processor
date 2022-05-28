@@ -26,7 +26,7 @@ func createNewLogger(opts ...Option) (*logrus.Logger, error) {
 	logger = logrus.New()
 	formatter := &logrus.TextFormatter{
 		TimestampFormat: "02-01-2006 15:04:05",
-		FullTimestamp:   false,
+		FullTimestamp:   true,
 		ForceColors:     true,
 		CallerPrettyfier: func(f *runtime.Frame) (string, string) {
 			return fmt.Sprintf("%s \t ", formatFilePath(f.Function)), fmt.Sprintf(" %s:%d \t", formatFilePath(f.File), f.Line)
