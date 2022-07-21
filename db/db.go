@@ -12,13 +12,22 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const (
-	host     string = "127.0.0.1"
-	port     string = "5432"
-	user     string = "dbuser"
-	password string = "dbpass"
-	dbname   string = "qtum"
-)
+type DbConfig struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	DBName   string
+	SSL      bool
+}
+
+func (config DbConfig) String() string {
+	ssl := "disable"
+	if config.SSL {
+		ssl = "enable"
+	}
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s", config.Host, config.Port, config.User, config.Password, config.DBName, ssl)
+}
 
 type QtumDB struct {
 	db         *sql.DB
@@ -28,11 +37,10 @@ type QtumDB struct {
 	errChan    chan error
 }
 
-func NewQtumDB(resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, error) {
+func NewQtumDB(connectionString string, resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, error) {
 	dbLogger, _ := log.GetLogger()
 	logger := dbLogger.WithField("module", "db")
-	psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
-	db, err := sql.Open("postgres", psqlInfo)
+	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +61,11 @@ func NewQtumDB(resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, e
 }
 
 func (q *QtumDB) insert(blockNum int, eth, qtum string) (sql.Result, error) {
-	insertDynStmt := `insert into "Hashes"("BlockNum", "Eth", "Qtum") values($1, $2, $3)`
+	insertDynStmt := `INSERT INTO "Hashes"("BlockNum", "Eth", "Qtum") VALUES($1, $2, $3) ON CONFLICT ON CONSTRAINT "Hashes_pkey" DO UPDATE SET "Eth" = $2, "Qtum" = $3`
 	return q.db.Exec(insertDynStmt, blockNum, eth, qtum)
 }
 
 func (q *QtumDB) DropTable() (sql.Result, error) {
-
 	dropStmt := `DROP TABLE IF EXISTS "Hashes"`
 	return q.db.Exec(dropStmt)
 }

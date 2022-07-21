@@ -25,6 +25,14 @@ var (
 	debug      = kingpin.Flag("debug", "debug mode").Short('d').Default("false").Bool()
 	blockFrom  = kingpin.Flag("from", "block number to start scanning from (default: 'Latest'").Short('f').Default("0").Int64()
 	blockTo    = kingpin.Flag("to", "block number to stop scanning (default: 1)").Short('t').Default("0").Int64()
+
+	host     = kingpin.Flag("host", "database hostname").Default("127.0.0.1").String()
+	port     = kingpin.Flag("port", "database port").Default("5432").String()
+	user     = kingpin.Flag("host", "database username").Default("dbuser").String()
+	password = kingpin.Flag("password", "database password").Default("dbpass").String()
+	dbname   = kingpin.Flag("dbname", "database name").Default("qtum").String()
+
+	dbConnectionString = kingpin.Flag("dbstring", "database connection string").String()
 )
 var logger *logrus.Logger
 var start time.Time
@@ -59,7 +67,20 @@ func main() {
 	blockChan := make(chan string, *numWorkers)
 	// channel to pass results from workers to DB
 	resultChan := make(chan jsonrpc.HashPair, *numWorkers)
-	qdb, err := db.NewQtumDB(resultChan, errChan)
+
+	connectionString := db.DbConfig{
+		Host:     *host,
+		Port:     *port,
+		User:     *user,
+		Password: *password,
+		DBName:   *dbname,
+	}.String()
+
+	if dbConnectionString != nil {
+		connectionString = *dbConnectionString
+	}
+
+	qdb, err := db.NewQtumDB(connectionString, resultChan, errChan)
 	checkError(err)
 	dbCloseChan := make(chan error)
 	qdb.Start(dbCloseChan)
