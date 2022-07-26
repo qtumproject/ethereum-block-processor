@@ -34,8 +34,8 @@ func NewClient(url string, id int) *Client {
 	})
 
 	tr := &http.Transport{
-		MaxIdleConns: 10,
-		// IdleConnTimeout:     60 * time.Second,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     60 * time.Second,
 		MaxIdleConnsPerHost: 10,
 		MaxConnsPerHost:     10,
 		//	DisableKeepAlives:   false,
@@ -59,7 +59,6 @@ func NewClient(url string, id int) *Client {
 }
 
 func (c *Client) Call(ctx context.Context, method string, params ...interface{}) (*JSONRPCResponse, error) {
-
 	rpcRequest := newJSONRPCRequest(method, params...)
 	jsonRequest, err := json.Marshal(rpcRequest)
 	if err != nil {
@@ -85,6 +84,11 @@ func (c *Client) newHttpRequest(ctx context.Context, jsonReq []byte) (*http.Requ
 func (c *Client) do(ctx context.Context, jsonReq []byte) (*JSONRPCResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*time.Duration(TIMEOUT))
 	defer cancel()
+
+	if rand.Intn(4) == 0 {
+		// return nil, errors.New("Fake failure")
+	}
+
 	httpReq, err := c.newHttpRequest(ctx, jsonReq)
 	if err != nil {
 		return nil, err
@@ -133,7 +137,7 @@ func (c *Client) doWithRetries(ctx context.Context, jsonReq []byte) (*JSONRPCRes
 				break
 			}
 			rand.Seed(time.Now().UnixNano())
-			n := rand.Intn(10)
+			n := rand.Intn(2)
 			c.logger.Warnf("Retrying in %v", backoff+500*time.Millisecond*time.Duration(n))
 			time.Sleep(backoff + 500*time.Millisecond*time.Duration(n))
 		}

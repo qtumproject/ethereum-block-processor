@@ -10,16 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alejoacosta74/eth2bitcoin-block-hash/cache"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/db"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/dispatcher"
+	"github.com/alejoacosta74/eth2bitcoin-block-hash/eth"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/workers"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
+	chainId    = kingpin.Flag("chain-id", "chain id").Int()
 	providers  = kingpin.Flag("providers", "qtum rpc providers").Default("https://janus.qiswap.com").Short('p').URLList()
 	numWorkers = kingpin.Flag("workers", "Number of workers. Defaults to system's number of CPUs.").Default(strconv.Itoa(runtime.NumCPU())).Short('w').Int()
 	debug      = kingpin.Flag("debug", "debug mode").Short('d').Default("false").Bool()
@@ -28,9 +30,10 @@ var (
 
 	host     = kingpin.Flag("host", "database hostname").Default("127.0.0.1").String()
 	port     = kingpin.Flag("port", "database port").Default("5432").String()
-	user     = kingpin.Flag("host", "database username").Default("dbuser").String()
+	user     = kingpin.Flag("user", "database username").Default("dbuser").String()
 	password = kingpin.Flag("password", "database password").Default("dbpass").String()
 	dbname   = kingpin.Flag("dbname", "database name").Default("qtum").String()
+	ssl      = kingpin.Flag("ssl", "database ssl").Bool()
 
 	dbConnectionString = kingpin.Flag("dbstring", "database connection string").String()
 )
@@ -58,13 +61,15 @@ func checkError(e error) {
 
 func main() {
 
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 
 	logger.Info("Number of workers: ", *numWorkers)
 	// channel to receive errors from goroutines
 	errChan := make(chan error, *numWorkers+1)
 	// channel to pass blocks to workers
-	blockChan := make(chan string, *numWorkers)
+	blockChan := make(chan int64, *numWorkers)
+	completedBlockChan := make(chan int64, *numWorkers)
 	// channel to pass results from workers to DB
 	resultChan := make(chan jsonrpc.HashPair, *numWorkers)
 
@@ -74,29 +79,53 @@ func main() {
 		User:     *user,
 		Password: *password,
 		DBName:   *dbname,
+		SSL:      *ssl,
 	}.String()
 
-	if dbConnectionString != nil {
+	if dbConnectionString != nil && *dbConnectionString != "" {
 		connectionString = *dbConnectionString
 	}
 
-	qdb, err := db.NewQtumDB(connectionString, resultChan, errChan)
+	qdb, err := db.NewQtumDB(ctx, connectionString, resultChan, errChan)
 	checkError(err)
 	dbCloseChan := make(chan error)
-	qdb.Start(dbCloseChan)
+	qdb.Start(ctx, *chainId, dbCloseChan)
 	// channel to signal  work completion to main from dispatcher
 	done := make(chan struct{})
 	// channel to receive os signals
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	// dispatch blocks to block channel
-	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	d := dispatcher.NewDispatcher(blockChan, *providers, *blockFrom, *blockTo, done, errChan)
-	d.Start(ctx)
+	blockCacheLogger := logger.WithField("module", "blockCache")
+
+	blockCache := cache.NewBlockCache(
+		ctx,
+		func(ctx context.Context) ([]int64, error) {
+			latestBlock, err := eth.GetLatestBlock(ctx, blockCacheLogger, (*providers)[0].String())
+			if err != nil {
+				return nil, err
+			}
+
+			return qdb.GetMissingBlocks(ctx, *chainId, latestBlock)
+		},
+	)
+
+	d := dispatcher.NewDispatcher(
+		blockChan,
+		resultChan,
+		completedBlockChan,
+		*providers,
+		*blockFrom,
+		*blockTo,
+		done,
+		errChan,
+		blockCache,
+	)
+	d.Start(ctx, *numWorkers, *providers, false)
 	// start workers
-	wg.Add(*numWorkers)
-	workers.StartWorkers(ctx, *numWorkers, blockChan, resultChan, *providers, &wg, errChan)
+	// wg.Add(*numWorkers)
+	// workers.StartWorkers(ctx, *numWorkers, blockChan, resultChan, *providers, &wg, errChan)
 	start = time.Now()
 
 	var status int
@@ -119,10 +148,6 @@ func main() {
 	wg.Wait()
 	logger.Info("All workers stopped. Waiting for DB to finish")
 	close(resultChan)
-	if status != 0 {
-		logger.Info("Dropping table")
-		qdb.DropTable()
-	}
 	select {
 	case err = <-dbCloseChan:
 		if err != nil {

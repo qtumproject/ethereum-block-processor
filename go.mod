@@ -4,6 +4,7 @@ go 1.17
 
 require (
 	github.com/ethereum/go-ethereum v1.10.16
+	github.com/pkg/errors v0.9.1
 	github.com/sony/gobreaker v0.5.0
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 )

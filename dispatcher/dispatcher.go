@@ -2,11 +2,12 @@ package dispatcher
 
 import (
 	"context"
-	"fmt"
+	"math/rand"
 	"net/url"
-	"strconv"
+	"sync"
 	"time"
 
+	"github.com/alejoacosta74/eth2bitcoin-block-hash/cache"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/workers"
@@ -14,106 +15,295 @@ import (
 )
 
 type dispatcher struct {
-	blockChan        chan string
-	done             chan struct{}
-	errChan          chan error
-	latestBlock      int64
-	firstBlock       int64
-	urls             []*url.URL
-	logger           *logrus.Entry
-	dispatchedBlocks int64
+	blockChan          chan int64
+	failedBlocksChan   chan int64
+	completedBlockChan chan int64
+	done               chan struct{}
+	errChan            chan error
+	resultChan         chan jsonrpc.HashPair
+	blockCache         *cache.BlockCache
+	latestBlock        int64
+	firstBlock         int64
+	urls               []*url.URL
+	logger             *logrus.Entry
+	dispatchedBlocks   int64
+	workers            *workers.Workers
+
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+	ctxMutex  sync.Mutex
 }
 
-func NewDispatcher(blockChan chan string, urls []*url.URL, blockFrom, blockTo int64, done chan struct{}, errChan chan error) *dispatcher {
+type EthJSONRPC func(ctx context.Context, method string, params ...interface{})
+
+func NewDispatcher(
+	blockChan chan int64,
+	resultChan chan jsonrpc.HashPair,
+	completedBlockChan chan int64,
+	urls []*url.URL,
+	blockFrom int64,
+	blockTo int64,
+	done chan struct{},
+	errChan chan error,
+	blockCache *cache.BlockCache,
+) *dispatcher {
 	dispatchLogger, _ := log.GetLogger()
 	return &dispatcher{
-		blockChan:   blockChan,
-		done:        done,
-		errChan:     errChan,
-		urls:        urls,
-		logger:      dispatchLogger.WithField("module", "dispatcher"),
-		latestBlock: blockFrom,
-		firstBlock:  blockTo,
+		blockChan:          blockChan,
+		failedBlocksChan:   make(chan int64, 4),
+		resultChan:         resultChan,
+		blockCache:         blockCache,
+		completedBlockChan: completedBlockChan,
+		done:               done,
+		errChan:            errChan,
+		urls:               urls,
+		logger:             dispatchLogger.WithField("module", "dispatcher"),
+		latestBlock:        blockFrom,
+		firstBlock:         blockTo,
+		workers:            workers.NewWorkers(),
 	}
 }
 
-func (d *dispatcher) findLatestBlock() int64 {
-	rpcClient := jsonrpc.NewClient(d.urls[0].String(), 0)
-	rpcResponse, err := rpcClient.Call(context.Background(), "eth_getBlockByNumber", "latest", false)
-	if err != nil {
-		d.logger.Error("Invalid endpoint: ", err)
-		d.errChan <- err
-		return 0
+func (d *dispatcher) Shutdown() {
+	d.ctxMutex.Lock()
+	defer d.ctxMutex.Unlock()
+
+	if d.ctxCancel != nil {
+		d.ctxCancel()
+
+		d.ctx = nil
+		d.ctxCancel = nil
 	}
-	if rpcResponse.Error != nil {
-		d.logger.Error("rpc response error: ", rpcResponse.Error)
-		d.errChan <- err
-		return 0
-	}
-	var qtumBlock jsonrpc.GetBlockByNumberResponse
-	err = jsonrpc.GetBlockFromRPCResponse(rpcResponse, &qtumBlock)
-	if err != nil {
-		d.logger.Error("could not convert result to qtum.GetBlockByNumberResponse", err)
-		d.errChan <- err
-		return 0
-	}
-	latest, _ := strconv.ParseInt(qtumBlock.Number, 0, 64)
-	d.logger.Debug("LatestBlock: ", latest)
-	return latest
 }
 
-func (d *dispatcher) Start(ctx context.Context) {
+func (d *dispatcher) Start(
+	ctx context.Context,
+	numWorkers int,
+	providers []*url.URL,
+	keepScaningForNewBlocks bool,
+) bool {
+	d.ctxMutex.Lock()
+	if d.ctx != nil {
+		d.ctxMutex.Unlock()
+		return false
+	}
+
+	completedBlockChanCtx, completedBlockChanCancel := context.WithCancel(ctx)
+
+	d.ctx = completedBlockChanCtx
+	d.ctxCancel = completedBlockChanCancel
+
+	d.ctxMutex.Unlock()
+
+	rand.Seed(time.Now().UnixNano())
+
+	d.blockCache.UpdateMissingBlocks(completedBlockChanCtx)
+
+	var wg sync.WaitGroup
+	var blocksProcessingWaitGroup sync.WaitGroup
+	blocksProcessingFinished := make(chan struct{})
+
+	var completedBlocks int
+	completedBlockInterceptChan := make(chan int64, numWorkers)
+
 	go func() {
-		if d.latestBlock == 0 {
-			d.latestBlock = d.findLatestBlock()
-		}
-		d.logger.Info("Starting dispatcher from block ", d.latestBlock, " to ", d.firstBlock)
-		for i := d.latestBlock; i > d.firstBlock; i-- {
+		for {
 			select {
+			case block := <-completedBlockInterceptChan:
+				d.completedBlockChan <- block
+				completedBlocks++
 			case <-ctx.Done():
 				return
-
-			default:
-				block := fmt.Sprintf("0x%x", i)
-				d.blockChan <- block
-				d.dispatchedBlocks++
-				// time.Sleep(time.Second * 10)
 			}
 		}
-		d.logger.Info("Checking for failed blocks")
-		attempts := 0
+	}()
+
+	workerState := workers.StartWorkers(
+		ctx,
+		numWorkers,
+		d.blockChan,
+		d.failedBlocksChan,
+		completedBlockInterceptChan,
+		d.resultChan,
+		providers,
+		&wg,
+		d.errChan,
+	)
+
+	go func() {
 		for {
-			failedBlocks := workers.GetFailedBlocks()
-			workers.ResetFailedBlocks()
-			if len(failedBlocks) > 0 {
-				attempts++
-				d.logger.WithFields(logrus.Fields{
-					"failed blocks": len(failedBlocks),
-					"attempts":      attempts,
-				}).Warn("retrying...")
-				for _, fb := range failedBlocks {
-					select {
-					case <-ctx.Done():
-						return
+			select {
+			case <-time.After(1 * time.Second):
+			case <-completedBlockChanCtx.Done():
+				return
+			}
 
-					default:
-						block := fmt.Sprintf("0x%x", fb)
-						d.blockChan <- block
-					}
-				}
-				d.logger.Info("waiting 10 seconds before retrying again...")
-				time.Sleep(time.Second * 10)
-			} else {
-				d.logger.Warn("No more failed blocks found")
-				break
+			totalFailedBlocks := workerState.GetTotalFailedBlocks()
+
+			d.logger.Infof(
+				"Block hash computation statistics: dispatched: %d, completed: %d, failures: %d",
+				d.dispatchedBlocks,
+				completedBlocks,
+				totalFailedBlocks,
+			)
+		}
+	}()
+
+	go func() {
+		processingMissingBlocksComplete := make(chan struct{})
+
+		// stopping means just canceling the context
+		go d.processMissingBlocks(completedBlockChanCtx, blocksProcessingWaitGroup, processingMissingBlocksComplete)
+		// go d.processFailedBlocks(completedBlockChanCtx, workerState)
+
+		if keepScaningForNewBlocks {
+			<-ctx.Done()
+
+		} else {
+			go func() {
+				blocksProcessingWaitGroup.Wait()
+				blocksProcessingFinished <- struct{}{}
+			}()
+
+			// need to wait for workers to finish processing blocks
+			d.logger.Info("Waiting for blocks to finish processing")
+			select {
+			case <-blocksProcessingFinished:
+				d.logger.Info("blocks finished processing")
+			case <-ctx.Done():
 			}
 		}
 
-		d.logger.Debug("closing block channel")
+		// wait for processMissingBlocks to exit before we close d.blockChan
+		// as it can write to a closed channel and panic
+		<-processingMissingBlocksComplete
+
+		d.logger.Info("closing block channel")
 		close(d.blockChan)
 		d.logger.Debug("finished dispatching blocks")
 		d.done <- struct{}{}
 	}()
+
+	return true
+}
+
+// Loops indefinitely checking for new blocks
+func (d *dispatcher) processMissingBlocks(ctx context.Context, blocksProcessingWaitGroup sync.WaitGroup, finished chan struct{}) {
+	queuedBlocks := make(map[int64]bool)
+	defer func() {
+		finished <- struct{}{}
+	}()
+	dispatched := 0
+	dispatch := func(blockToTry int64) bool {
+		if _, ok := queuedBlocks[blockToTry]; !ok {
+			d.logger.Infof("Queuing up block: %d\n", blockToTry)
+			blocksProcessingWaitGroup.Add(1)
+			d.blockChan <- int64(blockToTry)
+			queuedBlocks[blockToTry] = true
+			dispatched++
+			d.dispatchedBlocks++
+			return true
+		}
+
+		return false
+	}
+	for {
+		d.logger.Info("Updating missing blocks")
+		updated, err := d.blockCache.UpdateMissingBlocks(ctx)
+
+		if err != nil {
+			d.logger.Errorf("Failed updating missing blocks: %s\n", err)
+		}
+
+		if updated {
+			dispatched = 0
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// ok
+		}
+
+		d.logger.Info("Getting missing blocks")
+		missingBlocks := d.blockCache.GetMissingBlocks()
+		d.logger.Infof("got %d missing blocks\n", len(missingBlocks))
+
+		if len(missingBlocks)-dispatched == 0 {
+			d.logger.Info("No missing blocks")
+			if len(missingBlocks) != 0 {
+				// clear queuedBlocks
+				queuedBlocks = make(map[int64]bool)
+			}
+			select {
+			case <-time.After(10 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+		} else {
+			d.logger.Infof("There are %d missing blocks: %d\n", len(missingBlocks), dispatched)
+			successfullyDispatched := false
+			for i := 0; i < 10; i++ {
+				randomNumber := rand.Intn(len(missingBlocks))
+				blockToTry := missingBlocks[randomNumber]
+
+				if dispatch(blockToTry) {
+					successfullyDispatched = true
+				}
+			}
+
+			if !successfullyDispatched {
+				for i := int64(0); i < int64(len(missingBlocks)); i++ {
+					if dispatch(i) {
+						successfullyDispatched = true
+						break
+					}
+				}
+
+				if !successfullyDispatched {
+					// tried dispatching all blocks, they have all already been dispatched
+					dispatched = len(missingBlocks)
+				}
+			}
+		}
+	}
+}
+
+func (d *dispatcher) processFailedBlocks(ctx context.Context, workerState *workers.Workers) {
+	attempts := 0
+	for {
+		failedBlocks := workerState.GetAndResetFailedBlocks()
+		if len(failedBlocks) > 0 {
+			d.logger.Info("Found failed blocks")
+			attempts++
+			d.logger.WithFields(logrus.Fields{
+				"failed blocks": len(failedBlocks),
+				"attempts":      attempts,
+			}).Warn("retrying...")
+			for _, fb := range failedBlocks {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					d.failedBlocksChan <- fb
+				}
+			}
+			d.logger.Info("waiting 10 seconds before retrying again...")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second * 10):
+			}
+		} else {
+			d.logger.Warn("No failed blocks found")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second * 60):
+			}
+		}
+	}
 }
 
 // func dispatch(ctx context.Context, blockChan chan string, b int64) {

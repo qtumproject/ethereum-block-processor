@@ -34,6 +34,7 @@ func createNewLogger(opts ...Option) (*logrus.Logger, error) {
 	}
 
 	logger.SetFormatter(formatter)
+	logger.SetLevel(logrus.DebugLevel)
 
 	for _, opt := range opts {
 		if err := opt(logger); err != nil {

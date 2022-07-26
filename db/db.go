@@ -1,13 +1,16 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
 	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
 	_ "github.com/lib/pq"
+	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 	"github.com/sirupsen/logrus"
 )
@@ -30,14 +33,17 @@ func (config DbConfig) String() string {
 }
 
 type QtumDB struct {
-	db         *sql.DB
-	logger     *logrus.Entry
-	records    int64
-	resultChan chan jsonrpc.HashPair
-	errChan    chan error
+	db           *sql.DB
+	logger       *logrus.Entry
+	records      int64
+	resultChan   chan jsonrpc.HashPair
+	shutdownChan chan struct{}
+	errChan      chan error
+	running      bool
+	mutex        sync.RWMutex
 }
 
-func NewQtumDB(connectionString string, resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, error) {
+func NewQtumDB(ctx context.Context, connectionString string, resultChan chan jsonrpc.HashPair, errChan chan error) (*QtumDB, error) {
 	dbLogger, _ := log.GetLogger()
 	logger := dbLogger.WithField("module", "db")
 	db, err := sql.Open("postgres", connectionString)
@@ -50,38 +56,184 @@ func NewQtumDB(connectionString string, resultChan chan jsonrpc.HashPair, errCha
 	}
 
 	logger.Debug("Database Connected!")
-	createStmt := `CREATE TABLE IF NOT EXISTS "Hashes" ("BlockNum" int, "Eth" text PRIMARY KEY, "Qtum" text NOT NULL)`
-	_, err = db.Exec(createStmt)
+	createHashes := `CREATE TABLE IF NOT EXISTS "Hashes" ("BlockNum" int, "ChainId" int, "Eth" text, "Qtum" text NOT NULL, PRIMARY KEY("Eth", "ChainId"))`
+	_, err = db.ExecContext(ctx, createHashes)
 
 	if err != nil {
-		return nil, err
+		return nil, errors.WithMessage(err, "Failed to create 'Hashes' table")
 	}
 
-	return &QtumDB{db: db, logger: logger, resultChan: resultChan, errChan: errChan}, nil
+	return &QtumDB{db: db, logger: logger, resultChan: resultChan, shutdownChan: make(chan struct{}), errChan: errChan}, nil
 }
 
-func (q *QtumDB) insert(blockNum int, eth, qtum string) (sql.Result, error) {
-	insertDynStmt := `INSERT INTO "Hashes"("BlockNum", "Eth", "Qtum") VALUES($1, $2, $3) ON CONFLICT ON CONSTRAINT "Hashes_pkey" DO UPDATE SET "Eth" = $2, "Qtum" = $3`
-	return q.db.Exec(insertDynStmt, blockNum, eth, qtum)
+func (q *QtumDB) insert(ctx context.Context, blockNum, chainID int, eth, qtum string) (sql.Result, error) {
+	if chainID == 0 {
+		panic(chainID)
+	}
+	insertDynStmt := `INSERT INTO "Hashes"("BlockNum", "ChainId", "Eth", "Qtum") VALUES($1, $2, $3, $4) ON CONFLICT ON CONSTRAINT "Hashes_pkey" DO UPDATE SET "Qtum" = $3`
+	return q.db.ExecContext(ctx, insertDynStmt, blockNum, chainID, eth, qtum)
 }
 
-func (q *QtumDB) DropTable() (sql.Result, error) {
-	dropStmt := `DROP TABLE IF EXISTS "Hashes"`
-	return q.db.Exec(dropStmt)
+func (q *QtumDB) GetMissingBlocks(ctx context.Context, chainId int, latestBlock int64) ([]int64, error) {
+
+	offset := 0
+	limit := 500000
+	missingBlocks := make([]int64, latestBlock+int64(limit))
+	results := 0
+
+	for {
+		result, nextOffset, err := q.GetMissingBlocksRange(ctx, chainId, latestBlock, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(result) == 0 {
+			return missingBlocks[0:results], nil
+		}
+
+		// copy results into missing blocks
+		for i := 0; i < len(result)-1; i++ {
+			fmt.Printf("%d : %d ; %d; %d; %d\n", len(missingBlocks), len(result), nextOffset, offset, nextOffset-offset)
+			missingBlocks[offset+i] = result[i]
+			results++
+		}
+
+		offset = nextOffset
+	}
 }
 
-func (q *QtumDB) Start(dbCloseChan chan error) {
+func (q *QtumDB) GetMissingBlocksRange(ctx context.Context, chainId int, latestBlock int64, limit, offset int) ([]int64, int, error) {
+	// takes 1.5 sec for 2m rows on local postgres dev instance
+	missing := `
+	SELECT "B"."BlockNum"
+	FROM "Hashes" AS "A"
+	RIGHT JOIN generate_series(1, $1) AS "B"("BlockNum")
+	ON "A"."BlockNum" = "B"."BlockNum"
+	WHERE "A"."BlockNum" IS NULL
+	LIMIT $2 OFFSET $3
+	`
+
+	missing = `
+	SELECT "B"."BlockNum"
+	FROM "Hashes" AS "A"
+	RIGHT JOIN (select generate_series(1, $1) AS "BlockNum", $2::int4 As "ChainId") AS "B"
+	ON "A"."BlockNum" = "B"."BlockNum"
+    AND "A"."ChainId" = "B"."ChainId"
+	WHERE "A"."BlockNum" IS NULL
+    LIMIT $3 OFFSET $4
+	`
+	rows, err := q.db.QueryContext(ctx, missing, latestBlock, chainId, limit, offset)
+
+	if err != nil {
+		return nil, offset, err
+	}
+
+	result := make([]int64, limit)
+	rowCount := 0
+
+	for ; rows.Next(); rowCount++ {
+		err = rows.Scan(&result[rowCount])
+		if err != nil {
+			return nil, offset, err
+		}
+	}
+
+	return result[0:rowCount], limit + offset, nil
+}
+
+func (q *QtumDB) getQtumHash(ctx context.Context, chainId int, ethHash string) (*sql.Rows, error) {
+	selectStatement := `SELECT "Qtum" FROM "Hashes" WHERE "Hashes"."ChainId" = $1 AND "Hashes"."Eth" = $2`
+	if ctx == nil {
+		return q.db.Query(selectStatement, chainId, ethHash)
+	} else {
+		return q.db.QueryContext(ctx, selectStatement, chainId, ethHash)
+	}
+}
+
+func (q *QtumDB) GetQtumHash(chainId int, ethHash string) (*string, error) {
+	return q.GetQtumHashContext(nil, chainId, ethHash)
+}
+
+func (q *QtumDB) GetQtumHashContext(ctx context.Context, chainId int, ethHash string) (*string, error) {
+	var qtumHash string
+	rows, err := q.getQtumHash(ctx, chainId, ethHash)
+	if err != nil {
+		return &qtumHash, err
+	}
+
+	if rows == nil {
+		panic("no rows")
+	}
+
+	if !rows.Next() {
+		return nil, nil
+	}
+
+	err = rows.Scan(&qtumHash)
+	return &qtumHash, err
+}
+
+func (q *QtumDB) Shutdown() {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	q.shutdownChan <- struct{}{}
+}
+
+func (q *QtumDB) Start(ctx context.Context, chainId int, dbCloseChan chan error) {
+	q.mutex.Lock()
+	if q.running {
+		q.mutex.Unlock()
+		return
+	}
+	q.running = true
+	q.mutex.Unlock()
 	const PROGRESS_LEVEL_THRESHOLD = 10000
 	go func() {
 		progBar := getBar(PROGRESS_LEVEL_THRESHOLD)
 		start := time.Now()
+		defer func() {
+			q.logger.Debug("database exiting")
+			q.mutex.Lock()
+			q.running = false
+			q.mutex.Unlock()
+		}()
+
+		shuttingDown := false
+
 		for {
-			pair, ok := <-q.resultChan
+			q.logger.Info("Waiting for results...")
+			var pair jsonrpc.HashPair
+			var ok bool
+
+			if shuttingDown {
+				select {
+				case pair, ok = <-q.resultChan:
+				default:
+					// shutdown, finished draining results
+					q.logger.Info("Database finished draining results, shutting down")
+					err := q.db.Close()
+					dbCloseChan <- err
+					return
+				}
+			} else {
+				select {
+				case pair, ok = <-q.resultChan:
+				case <-ctx.Done():
+					shuttingDown = true
+					continue
+				case <-q.shutdownChan:
+					// finish writing then shutdown
+					shuttingDown = true
+					continue
+				}
+			}
+
 			if !ok {
 				q.logger.Info("QtumDB -> channel closed")
 				err := q.db.Close()
 				dbCloseChan <- err
 				return
+			} else {
+				q.logger.Info("Got result!")
 			}
 			q.logger = q.logger.WithFields(logrus.Fields{
 				"blockNum": pair.BlockNumber,
@@ -101,11 +253,10 @@ func (q *QtumDB) Start(dbCloseChan chan error) {
 				start = time.Now()
 				progBar = getBar(PROGRESS_LEVEL_THRESHOLD)
 			}
-			_, err := q.insert(pair.BlockNumber, pair.EthHash, pair.QtumHash)
+			_, err := q.insert(ctx, pair.BlockNumber, chainId, pair.EthHash, pair.QtumHash)
 			if err != nil {
 				q.logger.Error("error writing to db: ", err, " for block: ", pair.BlockNumber)
 				q.errChan <- err
-				q.logger.Debug("database exiting")
 				return
 			}
 			q.records += 1

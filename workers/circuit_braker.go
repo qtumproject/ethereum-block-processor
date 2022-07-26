@@ -25,7 +25,7 @@ type ClientCircuitBreakerProxy struct {
 	gb     *gobreaker.CircuitBreaker
 }
 
-var OPEN_TO_HALF_OPEN_TIMEOUT int = 1800
+var OPEN_TO_HALF_OPEN_TIMEOUT int = 180
 var FLUSH_CONTENT_INTERVAL int = 120
 
 // shouldBeSwitchedToOpen checks if the circuit breaker should
