@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
+	"github.com/qtumproject/ethereum-block-processor/log"
 	// "github.com/sirupsen/logrus"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
+	"github.com/qtumproject/ethereum-block-processor/jsonrpc"
 	"github.com/sirupsen/logrus"
 )
 

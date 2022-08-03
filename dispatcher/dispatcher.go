@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/cache"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/workers"
+	"github.com/qtumproject/ethereum-block-processor/cache"
+	"github.com/qtumproject/ethereum-block-processor/jsonrpc"
+	"github.com/qtumproject/ethereum-block-processor/log"
+	"github.com/qtumproject/ethereum-block-processor/workers"
 	"github.com/sirupsen/logrus"
 )
 

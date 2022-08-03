@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/cache"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/db"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/dispatcher"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/eth"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
+	"github.com/qtumproject/ethereum-block-processor/cache"
+	"github.com/qtumproject/ethereum-block-processor/db"
+	"github.com/qtumproject/ethereum-block-processor/dispatcher"
+	"github.com/qtumproject/ethereum-block-processor/eth"
+	"github.com/qtumproject/ethereum-block-processor/jsonrpc"
+	"github.com/qtumproject/ethereum-block-processor/log"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
 )

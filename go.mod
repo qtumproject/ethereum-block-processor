@@ -1,4 +1,4 @@
-module github.com/alejoacosta74/eth2bitcoin-block-hash
+module github.com/qtumproject/ethereum-block-processor
 
 go 1.17
 

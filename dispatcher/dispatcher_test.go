@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/workers"
+	"github.com/qtumproject/ethereum-block-processor/log"
+	"github.com/qtumproject/ethereum-block-processor/workers"
 )
 
 func TestDispatcher(t *testing.T) {

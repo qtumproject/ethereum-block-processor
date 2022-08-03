@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/jsonrpc"
-	"github.com/alejoacosta74/eth2bitcoin-block-hash/log"
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
+	"github.com/qtumproject/ethereum-block-processor/jsonrpc"
+	"github.com/qtumproject/ethereum-block-processor/log"
 	"github.com/schollz/progressbar/v3"
 	"github.com/sirupsen/logrus"
 )
@@ -75,7 +75,6 @@ func (q *QtumDB) insert(ctx context.Context, blockNum, chainID int, eth, qtum st
 }
 
 func (q *QtumDB) GetMissingBlocks(ctx context.Context, chainId int, latestBlock int64) ([]int64, error) {
-
 	offset := 0
 	limit := 500000
 	missingBlocks := make([]int64, latestBlock+int64(limit))
@@ -92,7 +91,6 @@ func (q *QtumDB) GetMissingBlocks(ctx context.Context, chainId int, latestBlock 
 
 		// copy results into missing blocks
 		for i := 0; i < len(result)-1; i++ {
-			fmt.Printf("%d : %d ; %d; %d; %d\n", len(missingBlocks), len(result), nextOffset, offset, nextOffset-offset)
 			missingBlocks[offset+i] = result[i]
 			results++
 		}
@@ -104,15 +102,6 @@ func (q *QtumDB) GetMissingBlocks(ctx context.Context, chainId int, latestBlock 
 func (q *QtumDB) GetMissingBlocksRange(ctx context.Context, chainId int, latestBlock int64, limit, offset int) ([]int64, int, error) {
 	// takes 1.5 sec for 2m rows on local postgres dev instance
 	missing := `
-	SELECT "B"."BlockNum"
-	FROM "Hashes" AS "A"
-	RIGHT JOIN generate_series(1, $1) AS "B"("BlockNum")
-	ON "A"."BlockNum" = "B"."BlockNum"
-	WHERE "A"."BlockNum" IS NULL
-	LIMIT $2 OFFSET $3
-	`
-
-	missing = `
 	SELECT "B"."BlockNum"
 	FROM "Hashes" AS "A"
 	RIGHT JOIN (select generate_series(1, $1) AS "BlockNum", $2::int4 As "ChainId") AS "B"
